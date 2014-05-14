@@ -12,26 +12,16 @@
  */
 package rajawali.parser;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.util.ArrayList;
-import java.util.Stack;
-import java.util.StringTokenizer;
+import java.io.*;
+import java.lang.reflect.Field;
+import java.util.*;
 
 import rajawali.Object3D;
 import rajawali.materials.Material;
 import rajawali.materials.methods.DiffuseMethod;
 import rajawali.materials.methods.SpecularMethod;
+import rajawali.materials.textures.*;
 import rajawali.materials.textures.ATexture.TextureException;
-import rajawali.materials.textures.NormalMapTexture;
-import rajawali.materials.textures.SpecularMapTexture;
-import rajawali.materials.textures.Texture;
-import rajawali.materials.textures.TextureManager;
 import rajawali.renderer.RajawaliRenderer;
 import rajawali.util.RajLog;
 import rajawali.wallpaper.Wallpaper;
@@ -122,13 +112,19 @@ public class LoaderOBJ extends AMeshLoader {
 			}
 		}
 		String line;
-		ObjIndexData currObjIndexData = new ObjIndexData(new Object3D());
+		ObjIndexData currObjIndexData = new ObjIndexData(new Object3D(generateObjectName()));
 		ArrayList<ObjIndexData> objIndices = new ArrayList<ObjIndexData>();
 				
 		ArrayList<Float> vertices = new ArrayList<Float>();
 		ArrayList<Float> texCoords = new ArrayList<Float>();
 		ArrayList<Float> normals = new ArrayList<Float>();
 		MaterialLib matLib = new MaterialLib();
+
+		String currentMaterialName=null;
+		boolean currentObjHasFaces=false;
+		Object3D currentGroup = mRootObject;
+		mRootObject.setName("default");
+		Map<String, Object3D> groups = new HashMap<String, Object3D>();
 		
 		try {
 			while((line = buffer.readLine()) != null) {
@@ -147,6 +143,7 @@ public class LoaderOBJ extends AMeshLoader {
 					vertices.add(Float.parseFloat(parts.nextToken()));
 					vertices.add(Float.parseFloat(parts.nextToken()));
 				} else if(type.equals(FACE)) {
+					currentObjHasFaces=true;
 					boolean isQuad = numTokens == 5;
 					int[] quadvids = new int[4];
 					int[] quadtids = new int[4];
@@ -215,26 +212,43 @@ public class LoaderOBJ extends AMeshLoader {
 					normals.add(Float.parseFloat(parts.nextToken()));
                     normals.add(Float.parseFloat(parts.nextToken()));
                     normals.add(Float.parseFloat(parts.nextToken()));
-				} else if(type.equals(OBJECT) || type.equals(GROUP)) {
-					String objName = parts.hasMoreTokens() ? parts.nextToken() : "Object" + (int)(Math.random() * 10000);
-					
-					if(type.equals(OBJECT))
-					{
-						RajLog.i("Parsing object: " + objName);
-						if(currObjIndexData.targetObj.getName() != null)
-							currObjIndexData = new ObjIndexData(new Object3D(objName));
-						else
-							currObjIndexData.targetObj.setName(objName);
-						objIndices.add(currObjIndexData);
-					} else if(type.equals(GROUP)) {
-						RajLog.i("Parsing group: " + objName);
-						Object3D group = mRootObject.getChildByName(objName);
-						if(group == null)
-						{
-							group = new Object3D(objName);
-							mRootObject.addChild(group);
+				} else if(type.equals(GROUP)) {
+					int numGroups = parts.countTokens();
+					Object3D previousGroup = null;
+					for(int i=0; i<numGroups; i++) {
+						String groupName = parts.nextToken();
+						if(!groups.containsKey(groupName)) {
+							groups.put(groupName, new Object3D(groupName));
 						}
-						group.addChild(currObjIndexData.targetObj);
+						Object3D group = groups.get(groupName);
+						if(previousGroup!=null) {
+							addChildSetParent(group, previousGroup);
+						} else {
+							currentGroup = group;
+						}
+						previousGroup = group;
+					}
+					RajLog.i("Parsing group: " + currentGroup.getName());
+					if (currentObjHasFaces) {
+						objIndices.add(currObjIndexData);
+						currObjIndexData = new ObjIndexData(new Object3D(generateObjectName()));
+						RajLog.i("Parsing object: " + currObjIndexData.targetObj.getName());
+						currObjIndexData.materialName = currentMaterialName;
+						currentObjHasFaces = false;
+					}
+					addChildSetParent(currentGroup, currObjIndexData.targetObj);
+				} else if(type.equals(OBJECT)) {
+					String objName = parts.hasMoreTokens() ? parts.nextToken() : generateObjectName();
+					if (currentObjHasFaces) {
+						objIndices.add(currObjIndexData);
+						currObjIndexData = new ObjIndexData(new Object3D(objName));
+						currObjIndexData.materialName = currentMaterialName;
+						addChildSetParent(currentGroup, currObjIndexData.targetObj);
+						RajLog.i("Parsing object: " + currObjIndexData.targetObj.getName());
+						currentObjHasFaces = false;
+					} else {
+						RajLog.i("Naming object: " + objName);
+						currObjIndexData.targetObj.setName(objName);
 					}
 				} else if(type.equals(MATERIAL_LIB)) {
 					if(!parts.hasMoreTokens()) continue;
@@ -245,7 +259,15 @@ public class LoaderOBJ extends AMeshLoader {
 					else
 						matLib.parse(materialLibPath, mResources.getResourceTypeName(mResourceId), mResources.getResourcePackageName(mResourceId));
 				} else if(type.equals(USE_MATERIAL)) {
-					currObjIndexData.materialName = parts.nextToken();
+					currentMaterialName = parts.nextToken();
+					if(currentObjHasFaces) {
+						objIndices.add(currObjIndexData);
+						currObjIndexData = new ObjIndexData(new Object3D(generateObjectName()));
+						RajLog.i("Parsing object: " + currObjIndexData.targetObj.getName());
+						addChildSetParent(currentGroup, currObjIndexData.targetObj);
+						currentObjHasFaces = false;
+					}
+					currObjIndexData.materialName = currentMaterialName;
 				}
 			}
 			buffer.close();
@@ -256,8 +278,7 @@ public class LoaderOBJ extends AMeshLoader {
 		} catch (IOException e) {
 			throw new ParsingException(e);
 		}
-		
-		
+
 		int numObjects = objIndices.size();
 		
 		for(int j=0; j<numObjects; ++j) {
@@ -317,15 +338,94 @@ public class LoaderOBJ extends AMeshLoader {
 				throw new ParsingException(tme);
 			}
 			if(oid.targetObj.getParent() == null)
-				mRootObject.addChild(oid.targetObj);
+				addChildSetParent(mRootObject, oid.targetObj);
+		}
+		for(Object3D group : groups.values()) {
+			if(group.getParent()==null)
+				addChildSetParent(mRootObject, group);
 		}
 		
 		if(mRootObject.getNumChildren() == 1 && !mRootObject.getChildAt(0).isContainer())
 			mRootObject = mRootObject.getChildAt(0);
+
+		for(int i=0; i<mRootObject.getNumChildren(); i++)
+			mergeGroupsAsObjects(mRootObject.getChildAt(i));
 		
 		return this;
 	}
-	
+
+
+	/**
+	 * Collapse single-object groups. (Some obj exporters use g token for objects)
+	 * @param object
+	 */
+	private void mergeGroupsAsObjects(Object3D object) {
+		if(object.isContainer() && object.getNumChildren()==1 && object.getChildAt(0).getName().startsWith("Object")) {
+			Object3D child = object.getChildAt(0);
+			object.removeChild(child);
+			child.setName(object.getName());
+			addChildSetParent(object.getParent(), child);
+			object.getParent().removeChild(object);
+			object = child;
+		}
+
+		for(int i=0; i<object.getNumChildren(); i++) {
+			mergeGroupsAsObjects(object.getChildAt(i));
+		}
+	}
+
+	private static String generateObjectName() {
+		return "Object" + (int) (Math.random() * 10000);
+	}
+
+	/**
+	 * Build string representation of object hierarchy
+	 * @param parent
+	 * @param sb
+	 * @param prefix
+	 */
+	private void buildObjectGraph(Object3D parent, StringBuffer sb, String prefix) {
+		sb.append(prefix).append("-->").append((parent.isContainer() ? "GROUP " : "") + parent.getName()).append('\n');
+		for(int i=0; i<parent.getNumChildren(); i++) {
+			buildObjectGraph(parent.getChildAt(i), sb, prefix+"\t");
+		}
+	}
+
+	static private Field mParent;
+	static {
+		try {
+			mParent = Object3D.class.getDeclaredField("mParent");
+			mParent.setAccessible(true);
+		} catch (NoSuchFieldException e) {
+			RajLog.e("Reflection error Object3D.mParent");
+		}
+	}
+
+	/**
+	 * Add child and set parent reference.
+	 * WHY DOES OBJECT3D NOT DO THIS?
+	 * @param parent
+	 * @param object
+	 */
+	private static void addChildSetParent(Object3D parent, Object3D object) {
+		try {
+			parent.addChild(object);
+			mParent.set(object, parent);
+		} catch(Exception e) {
+			RajLog.e("Reflection error Object3D.mParent");
+		}
+	}
+
+	public String toString() {
+		if(mRootObject==null) {
+			return "Object not parsed";
+		} else {
+			StringBuffer sb = new StringBuffer();
+			buildObjectGraph(mRootObject, sb, "");
+			return sb.toString();
+		}
+	}
+
 	protected class ObjIndexData {
 		public Object3D targetObj;
 		
@@ -463,7 +563,13 @@ public class LoaderOBJ extends AMeshLoader {
 			Material mat = new Material();
 			mat.enableLighting(true);
 			mat.setDiffuseMethod(new DiffuseMethod.Lambert());
-			mat.setColor(matDef != null ? matDef.diffuseColor : (0xff000000 + ((int)(Math.random() * 0xffffff))));
+			if(matDef!=null) {
+				int alpha = (int)(matDef.alpha*255f);
+				mat.setColor(((alpha<<24)&0xFF000000)|(matDef.diffuseColor&0x00FFFFFF));
+			} else {
+				mat.setColor((int)(Math.random() * 0xffffff));
+			}
+
 			if(hasSpecular || hasSpecularTexture) {
 				SpecularMethod.Phong method = new SpecularMethod.Phong();
 				method.setSpecularColor(matDef.specularColor);
@@ -472,11 +578,31 @@ public class LoaderOBJ extends AMeshLoader {
 			
 			if(hasTexture) {
 				if(mFile == null) {
-					int identifier = mResources.getIdentifier(getFileNameWithoutExtension(matDef.diffuseTexture), "drawable", mResourcePackage);
-					mat.addTexture(new Texture(object.getName() + identifier, identifier));
+					final String fileNameWithoutExtension = getFileNameWithoutExtension(matDef.diffuseTexture);
+					int id = mResources.getIdentifier(fileNameWithoutExtension, "drawable", mResourcePackage);
+					int etc1Id = mResources.getIdentifier(fileNameWithoutExtension, "raw", mResourcePackage);
+					if(etc1Id!=0) {
+						mat.addTexture(new Texture(object.getName()+fileNameWithoutExtension, new Etc1Texture(object.getName()+etc1Id, etc1Id, id!=0 ? BitmapFactory.decodeResource(mResources, id) : null)));
+					} else if(id!=0) {
+						mat.addTexture(new Texture(object.getName()+fileNameWithoutExtension, id));
+					}
 				} else {
 					String filePath = mFile.getParent() + File.separatorChar + getOnlyFileName(matDef.diffuseTexture);
-					mat.addTexture(new Texture(getOnlyFileName(matDef.diffuseTexture), BitmapFactory.decodeFile(filePath)));
+					if(filePath.endsWith(".pkm")) {
+						FileInputStream fis = null;
+						try {
+							fis = new FileInputStream(filePath);
+							mat.addTexture(new Texture(getOnlyFileName(matDef.diffuseTexture), new Etc1Texture(getOnlyFileName(matDef.diffuseTexture)+"etc1", fis, null)));
+						} catch (FileNotFoundException e) {
+							Log.e("LoaderOBJ", "File decode error", e);
+						} finally {
+							try {
+								fis.close();
+							} catch (IOException e) {}
+						}
+					} else {
+						mat.addTexture(new Texture(getOnlyFileName(matDef.diffuseTexture), BitmapFactory.decodeFile(filePath)));
+					}
 				}
 				mat.setColorInfluence(0);
 			}
@@ -499,6 +625,8 @@ public class LoaderOBJ extends AMeshLoader {
 				}
 			}
 			object.setMaterial(mat);
+			if(matDef!=null && matDef.alpha<1f)
+				object.setTransparent(true);
 		}
 		
 		private int getColorFromParts(StringTokenizer parts) {

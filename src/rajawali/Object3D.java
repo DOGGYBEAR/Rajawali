@@ -195,8 +195,23 @@ public class Object3D extends ATransformable3D implements Comparable<Object3D>, 
 	}
 	
 	public void calculateModelMatrix(final Matrix4 parentMatrix) {
+//<<<<<<< HEAD
 		mMMatrix.identity().translate(mPosition).scale(mScale).rotate(mOrientation);
-		if (parentMatrix != null) mMMatrix.leftMultiply(mParentMatrix);
+		if (parentMatrix != null) {
+			mParentMatrix = parentMatrix;
+			mMMatrix.leftMultiply(mParentMatrix);
+		}
+/*=======
+		mParentMatrix = parentMatrix;
+		setOrientation();
+		if (mLookAt == null) {
+			mOrientation.toRotationMatrix(mRotationMatrix);
+		} else {
+			mRotationMatrix.setAll(mLookAtMatrix);
+		}
+		mMMatrix.identity().translate(mPosition).scale(mScale).multiply(mRotationMatrix);
+		if (parentMatrix != null) mMMatrix.leftMultiply(parentMatrix);
+//>>>>>>> master*/
 	}
 
 	/**
@@ -230,7 +245,6 @@ public class Object3D extends ATransformable3D implements Comparable<Object3D>, 
 
 		preRender();
 
-		mParentMatrix = parentMatrix;
 		// -- move view matrix transformation first
 		calculateModelMatrix(parentMatrix);
 		// -- calculate model view matrix;
